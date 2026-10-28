@@ -20,6 +20,7 @@ local flightPart, attachment, velocity, orientation, flightHumanoid, previousPla
 local defaults, speedOverride, jumpOverride = nil, nil, nil
 local originalGravity = workspace.Gravity
 local closed = false
+local chatCommands = {}
 local function connect(signal, callback)
     local connection = signal:Connect(callback)
     table.insert(connections, connection)
@@ -90,7 +91,11 @@ panel.Name = "Console"
 panel.Size = UDim2.fromOffset(300, 380)
 panel.AnchorPoint = Vector2.new(1, 1)
 panel.Position = UDim2.new(1, -16, 1, -16)
-panel.BackgroundColor3 = Color3.fromRGB(36, 36, 37)
+panel.BackgroundColor3 = Color3.fromRGB(24, 26, 32)
+local outline = Instance.new("UIStroke")
+outline.Color = Color3.fromRGB(75, 103, 150)
+outline.Thickness = 1
+outline.Parent = panel
 panel.BorderSizePixel = 0
 panel.Parent = gui
 local function text(class, value, parent, position, size)
@@ -98,7 +103,7 @@ local function text(class, value, parent, position, size)
     item.Text = value
     item.Position = position
     item.Size = size
-    item.BackgroundColor3 = Color3.fromRGB(48, 48, 49)
+    item.BackgroundColor3 = Color3.fromRGB(36, 39, 48)
     item.BorderSizePixel = 0
     item.TextColor3 = Color3.fromRGB(235, 235, 235)
     item.Font = Enum.Font.SourceSans
@@ -106,7 +111,7 @@ local function text(class, value, parent, position, size)
     item.Parent = parent
     return item
 end
-local header = text("TextLabel", "  @  MOVEMENT YIELD", panel, UDim2.fromOffset(0, 0), UDim2.new(1, 0, 0, 30))
+local header = text("TextLabel", "  @  MOVEMENT YIELD  /  v2", panel, UDim2.fromOffset(0, 0), UDim2.new(1, 0, 0, 30))
 header.TextXAlignment = Enum.TextXAlignment.Left
 header.Active = true
 local minimize = text("TextButton", "−", header, UDim2.new(1, -60, 0, 0), UDim2.fromOffset(30, 30))
@@ -136,7 +141,7 @@ status.BackgroundTransparency = 1
 status.TextSize = 13
 status.TextWrapped = true
 status.TextXAlignment = Enum.TextXAlignment.Left
-local footer = text("TextLabel", "COMANDOS LOCALES  •  ; / RightShift", panel, UDim2.new(0, 0, 1, -22), UDim2.new(1, 0, 0, 22))
+local footer = text("TextLabel", "↑↓ HISTORIAL   •   TAB COMPLETAR   •   ; ABRIR", panel, UDim2.new(0, 0, 1, -22), UDim2.new(1, 0, 0, 22))
 footer.TextSize = 12
 footer.TextColor3 = Color3.fromRGB(170, 170, 170)
 local toggle = text("TextButton", "@", gui, UDim2.new(1, -48, 0, 12), UDim2.fromOffset(36, 36))
@@ -195,6 +200,7 @@ local function cleanup()
     closed = true
     reset()
     for _, connection in ipairs(connections) do connection:Disconnect() end
+    for _, command in ipairs(chatCommands) do command:Destroy() end
     gui:Destroy()
 end
 connect(shutdown.Event, cleanup)
@@ -220,12 +226,29 @@ for _, module in ipairs(folder:GetChildren()) do
     if module:IsA("ModuleScript") then commands[module.Name] = require(module) end
 end
 -- COMMAND_MODULES_END
+local aliases = {}
+for name, command in pairs(commands) do
+    aliases[name] = name
+    for _, alias in ipairs(command.aliases or {}) do aliases[alias] = name end
+end
+context.help = function(query)
+    local command = query and commands[aliases[query:lower()]]
+    if query then
+        assert(command, "Comando desconocido: " .. query)
+        status.Text = command.usage .. " — " .. command.description
+            .. (#(command.aliases or {}) > 0 and (" | Alias: " .. table.concat(command.aliases, ", ")) or "")
+    else
+        status.Text = "Ej.: fly 80 / speed --valor=32 / noclip off. Chat: /fly 80. help comando: detalles."
+    end
+end
 local rows, names = {}, {}
 for name in pairs(commands) do table.insert(names, name) end
 table.sort(names)
 for index, name in ipairs(names) do
     local command = commands[name]
-    local row = text("TextButton", "  " .. command.usage, list, UDim2.new(), UDim2.new(1, -6, 0, 32))
+    local row = text("TextButton", "  " .. command.usage .. "\n  " .. command.description, list, UDim2.new(), UDim2.new(1, -6, 0, 48))
+    row.TextSize = 14
+    row.TextWrapped = true
     row.LayoutOrder = index
     row.TextXAlignment = Enum.TextXAlignment.Left
     rows[name] = row
@@ -237,25 +260,99 @@ for index, name in ipairs(names) do
     end)
 end
 connect(input:GetPropertyChangedSignal("Text"), function()
-    local query = input.Text:lower():match("^%s*[;!]?(%S*)") or ""
-    for name, row in pairs(rows) do row.Visible = name:find(query, 1, true) ~= nil end
+    local query = input.Text:lower():match("^%s*[;!/]?(%S*)") or ""
+    local count = 0
+    for name, row in pairs(rows) do
+        local command = commands[name]
+        local haystack = name .. " " .. command.description:lower() .. " " .. table.concat(command.aliases or {}, " ")
+        row.Visible = haystack:find(query, 1, true) ~= nil
+        if row.Visible then count = count + 1 end
+    end
+    footer.Text = count .. " COMANDOS  •  ↑↓ HISTORIAL / TAB COMPLETAR"
     list.CanvasPosition = Vector2.zero
 end)
 
-local function execute()
-    local args = string.split(string.lower(input.Text:match("^%s*(.-)%s*$")), " ")
-    local filtered = {}
-    for _, arg in ipairs(args) do if arg ~= "" then table.insert(filtered, arg) end end
-    args = filtered
+local history, historyIndex, draft = {}, 1, ""
+local function execute(raw)
+    if closed then return end
+    local args = {}
+    for token in raw:gmatch("%S+") do table.insert(args, token) end
     if not args[1] then return end
-    args[1] = args[1]:gsub("^[;!]", "")
-    local command = commands[args[1]]
-    if not command then status.Text = "Comando desconocido. Escribe help."; return end
-    local ok, err = pcall(command.run, context, args)
-    if not closed and args[1] ~= "help" then status.Text = ok and ("OK: " .. table.concat(args, " ")) or tostring(err) end
+    local name = aliases[args[1]:lower():gsub("^[;!/]", "")]
+    local command = name and commands[name]
+    if not command then status.Text = "Comando desconocido. Usa help o busca en la lista."; return end
+    local ok, err = pcall(function()
+        if args[2] == "--help" then context.help(name); return end
+        if command.parameter then
+            local spec = command.parameter
+            local value = args[2]
+            if value and value:sub(1, 2) == "--" then
+                local key, inline = value:match("^%-%-([%w]+)=(.+)$")
+                if not key then key = value:sub(3); inline = args[3] end
+                assert(key == spec.name, "Parámetro esperado: --" .. spec.name)
+                assert(inline, "Falta valor para --" .. spec.name)
+                assert(#args <= (value:find("=", 1, true) and 2 or 3), "Demasiados parámetros")
+                args = {name, inline}
+            else
+                assert(#args <= 2, "Uso: " .. command.usage)
+            end
+            assert(not spec.required or args[2], "Uso: " .. command.usage)
+            if args[2] then context.number(args[2], spec.minimum, spec.maximum) end
+        elseif command.toggle then
+            if args[2] then args[2] = args[2]:lower() end
+            assert(#args <= 2 and (not args[2] or args[2] == "on" or args[2] == "off"), "Uso: " .. command.usage)
+        else
+            assert(#args <= (name == "help" and 2 or 1), "Uso: " .. command.usage)
+        end
+        command.run(context, args)
+        if not closed and name ~= "help" then status.Text = "✓ " .. raw end
+    end)
+    if not closed and not ok then status.Text = "Error: " .. tostring(err) end
+    if history[#history] ~= raw then table.insert(history, raw) end
+    if #history > 50 then table.remove(history, 1) end
+    historyIndex, draft = #history + 1, ""
 end
-connect(run.Activated, execute)
-connect(input.FocusLost, function(enter) if enter then execute() end end)
+connect(run.Activated, function() execute(input.Text) end)
+connect(input.FocusLost, function(enter) if enter then execute(input.Text) end end)
+-- El chat moderno usa slash commands locales: no se ejecutan mensajes ajenos.
+local TextChatService = game:GetService("TextChatService")
+if TextChatService.ChatVersion == Enum.ChatVersion.TextChatService then
+    for _, name in ipairs(names) do
+        local command = Instance.new("TextChatCommand")
+        command.Name = "Movement_" .. name
+        command.PrimaryAlias = "/" .. name
+        if commands[name].aliases and commands[name].aliases[1] then
+            command.SecondaryAlias = "/" .. commands[name].aliases[1]
+        end
+        connect(command.Triggered, function(source, message)
+            if source and source.UserId == player.UserId then execute(message) end
+        end)
+        table.insert(chatCommands, command)
+        command.Parent = TextChatService
+    end
+else
+    connect(player.Chatted, function(message)
+        if message:match("^[;!]") then execute(message) end
+    end)
+end
+connect(UserInputService.InputBegan, function(key)
+    if UserInputService:GetFocusedTextBox() ~= input then return end
+    if key.KeyCode == Enum.KeyCode.Up or key.KeyCode == Enum.KeyCode.Down then
+        if historyIndex == #history + 1 then draft = input.Text end
+        local delta = key.KeyCode == Enum.KeyCode.Up and -1 or 1
+        historyIndex = math.clamp(historyIndex + delta, 1, #history + 1)
+        input.Text = history[historyIndex] or draft
+        input.CursorPosition = #input.Text + 1
+    elseif key.KeyCode == Enum.KeyCode.Tab then
+        for _, name in ipairs(names) do
+            if rows[name].Visible then
+                input.Text = name .. " "
+                input.CursorPosition = #input.Text + 1
+                break
+            end
+        end
+    elseif key.KeyCode == Enum.KeyCode.Escape then input:ReleaseFocus() end
+end)
 connect(UserInputService.InputBegan, function(key, processed)
     if processed or UserInputService:GetFocusedTextBox() then return end
     pressed[key.KeyCode] = true

@@ -1,5 +1,7 @@
 -- Vuelo del vehículo
 return {
+    aliases = {"vfly"},
+    parameter = { name = "velocidad", minimum = 1, maximum = 500, required = false },
     usage = "vehiclefly [velocidad]",
     description = "Vuelo del vehículo",
     run = function(ctx, args)
