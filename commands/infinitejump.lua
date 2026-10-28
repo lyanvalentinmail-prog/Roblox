@@ -1,8 +1,9 @@
 -- Saltar en el aire
 return {
-    usage = "infinitejump",
+    usage = "infinitejump [on|off]",
     description = "Saltar en el aire",
+    toggle = true,
     run = function(ctx, args)
-        ctx.setInfiniteJump(true)
+        ctx.setInfiniteJump(args[2] ~= "off")
     end,
 }
